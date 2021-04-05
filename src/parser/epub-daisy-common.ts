@@ -1471,7 +1471,8 @@ export const addMediaOverlaySMIL = async (link: Link, manItemSmil: Manifest, opf
 };
 
 // mo.initialized true/false is automatically handled
-export const lazyLoadMediaOverlays = async (publication: Publication, mo: MediaOverlayNode) => {
+export const lazyLoadMediaOverlays = async (
+    publication: Publication, mo: MediaOverlayNode, isDaisy2: boolean = false) => {
 
     if (mo.initialized || !mo.SmilPathInZip) {
         return;
@@ -1569,6 +1570,10 @@ export const lazyLoadMediaOverlays = async (publication: Publication, mo: MediaO
 
     let smilStr = smilZipData.toString("utf8");
 
+    // if (isDaisy2) {
+    //     smilStr = smilStr.replace(/clip-begin/g, "clipBegin").replace(/clip-end/g, "clipEnd").replace(/npt=/g, "");
+    // }
+
     const iStart = smilStr.indexOf("<smil");
     if (iStart >= 0) {
         const iEnd = smilStr.indexOf(">", iStart);
@@ -1581,6 +1586,45 @@ export const lazyLoadMediaOverlays = async (publication: Publication, mo: MediaO
     }
 
     const smilXmlDoc = new xmldom.DOMParser().parseFromString(smilStr);
+
+    if (isDaisy2) {
+        const pars = smilXmlDoc.getElementsByTagName("par");
+        // remove seq inside par
+        // tslint:disable-next-line: prefer-for-of
+        for (let i = 0; i < pars.length; i++) {
+            const par = pars[i];
+            const seq = par.getElementsByTagName("seq")[0];
+            if (seq) {
+                // const audioInsidePar = smilXmlDoc.createElement("audio");
+                let audioInsidePar;
+                let clipBegin = "";
+                let clipEnd = "";
+                let src = "";
+                let id = "";
+                const audios = seq.getElementsByTagName("audio");
+                for (let j = 0; j < audios.length; j++) {
+                    if (j === 0) {
+                        audioInsidePar = audios[j];
+                        clipBegin = audios[j].getAttribute("clip-begin") || "";
+                        src = audios[j].getAttribute("src") || "";
+                        id = audios[j].getAttribute("id") || "";
+                    }
+                    if (j === audios.length - 1) {
+                        clipEnd = audios[j].getAttribute("clip-end") || "";
+                    }
+                }
+                if (audioInsidePar) {
+                    audioInsidePar.setAttribute("clipBegin", clipBegin.replace("npt=", ""));
+                    audioInsidePar.setAttribute("clipEnd", clipEnd.replace("npt=", ""));
+                    audioInsidePar.setAttribute("src", src);
+                    audioInsidePar.setAttribute("id", id);
+                    par.appendChild(audioInsidePar);
+                    par.removeChild(seq);
+                }
+            }
+        }
+    }
+
     const smil = XML.deserialize<SMIL>(smilXmlDoc, SMIL);
     smil.ZipPath = mo.SmilPathInZip;
 
@@ -1663,7 +1707,6 @@ export const lazyLoadMediaOverlays = async (publication: Publication, mo: MediaO
                 if (!mo.Children) {
                     mo.Children = [];
                 }
-
                 addSeqToMediaOverlay(smil, publication, mo, mo.Children, seqChild);
             });
         }
@@ -1775,7 +1818,6 @@ const addSeqToMediaOverlay = (
         }
     } else { // Par
         const par = seqChild as Par;
-
         if (par.ID) {
             moc.ParID = par.ID;
         }

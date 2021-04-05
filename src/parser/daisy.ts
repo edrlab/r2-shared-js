@@ -18,6 +18,7 @@ import { IZip } from "@r2-utils-js/_utils/zip/zip";
 import { zipLoadPromise } from "@r2-utils-js/_utils/zip/zipFactory";
 
 import { zipHasEntry } from "../_utils/zipHasEntry";
+import { getNccAndNcxFromOpf } from "./daisy-covert-ncc-to-opf";
 import {
     addIdentifier, addLanguage, addMediaOverlaySMIL, addOtherMetadata, addTitle,
     fillPublicationDate, fillSpineAndResource, fillSubject, fillTOC, findContributorInMeta, getNcx,
@@ -98,6 +99,13 @@ export async function isDaisyPublication(urlOrPath: string): Promise<DaisyBookis
 //     return [true];
 // };
 
+export const isDaisy2Version = (files: string[]) => {
+    if (files.some((file) => file.match(/ncc\.html$/))) {
+        return true;
+    }
+    return false;
+};
+
 export async function DaisyParsePromise(filePath: string): Promise<Publication> {
 
     // const isDaisy = await isDaisyPublication(filePath);
@@ -127,7 +135,7 @@ export async function DaisyParsePromise(filePath: string): Promise<Publication> 
 
     // note: does not work in RemoteExploded
     const entries = await zip.getEntries();
-
+    const isDaisy2 = isDaisy2Version(entries);
     // const [valid, message] = isFileValid(entries);
     // if (!valid) {
     //     return Promise.reject(message || "File validation failed.");
@@ -135,13 +143,18 @@ export async function DaisyParsePromise(filePath: string): Promise<Publication> 
 
     // generic "text/xml" content type
     // manifest/item@media-type
-    const opfZipEntryPath = entries.find((entry) => {
+    let opfZipEntryPath = entries.find((entry) => {
         // regexp fails?!
         // return /[^/]+\.opf$/.test(entry);
         return entry.endsWith(".opf") && entry.indexOf("/") < 0 && entry.indexOf("\\") < 0;
     });
-    if (!opfZipEntryPath) {
-        return Promise.reject("Opf File doesn't exists");
+
+    if (isDaisy2) {
+        opfZipEntryPath = entries.find((entry) => {
+            // regexp fails?!
+            // return /[^/]+\.opf$/.test(entry);
+            return entry.match(/ncc\.html$/);
+        });
     }
 
     const rootfilePathDecoded = opfZipEntryPath; // || "package.opf";
@@ -149,7 +162,32 @@ export async function DaisyParsePromise(filePath: string): Promise<Publication> 
         return Promise.reject("?!rootfile.PathDecoded");
     }
 
-    const opf = await getOpf(zip, rootfilePathDecoded, opfZipEntryPath);
+    if (!opfZipEntryPath) {
+        return Promise.reject("Opf File doesn't exists");
+        // opfZipEntryPath = os.tmpdir() + "/package.opf";
+    }
+
+    let opf: OPF | undefined;
+    let ncx: NCX | undefined;
+    if (isDaisy2) {
+        [opf, ncx] = await getNccAndNcxFromOpf(zip, rootfilePathDecoded, opfZipEntryPath, publication);
+    } else {
+        opf = await getOpf(zip, rootfilePathDecoded, opfZipEntryPath);
+        if (opf.Manifest) {
+            let ncxManItem = opf.Manifest.find((manifestItem) => {
+                return manifestItem.MediaType === "application/x-dtbncx+xml";
+            });
+            if (!ncxManItem) {
+                ncxManItem = opf.Manifest.find((manifestItem) => {
+                    return manifestItem.MediaType === "text/xml" &&
+                        manifestItem.Href && manifestItem.Href.endsWith(".ncx");
+                });
+            }
+            if (ncxManItem) {
+                ncx = await getNcx(ncxManItem, opf, zip);
+            }
+        }
+    }
 
     addLanguage(publication, opf);
 
@@ -164,22 +202,6 @@ export async function DaisyParsePromise(filePath: string): Promise<Publication> 
     findContributorInMeta(publication, undefined, opf);
 
     await fillSpineAndResource(publication, undefined, opf, zip, addLinkData);
-
-    let ncx: NCX | undefined;
-    if (opf.Manifest) {
-        let ncxManItem = opf.Manifest.find((manifestItem) => {
-            return manifestItem.MediaType === "application/x-dtbncx+xml";
-        });
-        if (!ncxManItem) {
-            ncxManItem = opf.Manifest.find((manifestItem) => {
-                return manifestItem.MediaType === "text/xml" &&
-                    manifestItem.Href && manifestItem.Href.endsWith(".ncx");
-            });
-        }
-        if (ncxManItem) {
-            ncx = await getNcx(ncxManItem, opf, zip);
-        }
-    }
 
     fillTOC(publication, opf, ncx);
 
@@ -196,6 +218,10 @@ const addLinkData = async (
 
     if (publication.Metadata?.AdditionalJSON) {
 
+        const entries = await zip.getEntries();
+
+        const isDasiy2 = isDaisy2Version(entries);
+
         // dtb:multimediaContent ==> audio,text
         const isFullTextAudio = publication.Metadata.AdditionalJSON["dtb:multimediaType"] === "audioFullText";
 
@@ -211,7 +237,7 @@ const addLinkData = async (
             if (linkItem.MediaOverlays && !linkItem.MediaOverlays.initialized) {
 
                 // mo.initialized true/false is automatically handled
-                await lazyLoadMediaOverlays(publication, linkItem.MediaOverlays);
+                await lazyLoadMediaOverlays(publication, linkItem.MediaOverlays, isDasiy2);
 
                 if (isFullTextAudio || isAudioOnly) {
                     updateDurations(linkItem.MediaOverlays.duration, linkItem);

@@ -377,6 +377,13 @@ export const convertDaisyToReadiumWebPub = async (
             };
 
             const audioOnlySmilHtmls: Link[] = [];
+
+            if (publication.Daisy2Files && publication.Daisy2Files.length > 0) {
+                for (const file of publication.Daisy2Files) {
+                    zipfile.addBuffer(Buffer.from(file.data), file.name);
+                }
+            }
+
             if (publication.Spine) {
 
                 mediaOverlaysMap = {};
@@ -1374,6 +1381,11 @@ ${cssHrefs.reduce((pv, cv) => {
                     }
 
                     resourcesToKeep.push(resLink);
+
+                    if (resLink.HrefDecoded.endsWith(".html") ||
+                        resLink.TypeLink === "text/html") {
+                        dtBooks.push(resLink);
+                    }
                 }
             }
 
@@ -1444,12 +1456,15 @@ ${cssHrefs.reduce((pv, cv) => {
                     debug("mediaOverlay:", mediaOverlay.index, mediaOverlay.smilTextRef);
 
                     const dtBookLink = dtBooks.find((l) => {
-                        return l.HrefDecoded === mediaOverlay.smilTextRef;
+                        return l.HrefDecoded ?
+                            l.HrefDecoded.toLowerCase() === mediaOverlay.smilTextRef.toLowerCase()
+                            : false;
                     });
 
                     if (!dtBookLink) {
                         debug("!!dtBookLink");
-                    } else if (dtBookLink.HrefDecoded !== mediaOverlay.smilTextRef) {
+                    } else if (!dtBookLink.HrefDecoded ||
+                            (dtBookLink.HrefDecoded.toLowerCase() !== mediaOverlay.smilTextRef.toLowerCase())) {
                         debug("dtBook.HrefDecoded !== mediaOverlay.smilTextRef",
                             dtBookLink.HrefDecoded, mediaOverlay.smilTextRef);
                     } else {
